@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Content Competition Game</title>
+<style>
+  :root { --blue:#2563ab; --ink:#14233f; --bg:#e8f0fa; --card:#fff; }
+  body { font-family: system-ui, sans-serif; margin:0; background:var(--bg); color:var(--ink); }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { margin-bottom: 4px; } p.sub { margin-top:0; color:#456; }
+  section { background: var(--card); border-radius: 10px; padding: 18px; margin: 16px 0; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #c9d6e8; padding: 8px; text-align: center; }
+  th { background: var(--blue); color: #fff; }
+  td.nash { background:#fff3c4; font-weight:700; }
+  input[type=number] { width: 52px; padding: 4px; text-align:center; }
+  button { background: var(--blue); color:#fff; border:0; padding:8px 16px; border-radius:6px; cursor:pointer; }
+  select, input { margin: 0 8px 8px 0; }
+  .tag { display:inline-block; padding:2px 8px; border-radius: 12px; background:var(--bg); margin:2px; }
+  .err { color:#b00020; }
+  #hist td, #hist th { padding:3px 6px; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Social Media Content Competition</h1>
+  <p class="sub">Two platforms choose <b>Invest</b> or <b>Maintain</b>. Edit the payoffs (A, B) and analyze.</p>
+
+  <section>
+    <h2>Payoff matrix</h2>
+    <table>
+      <tr><th>A \ B</th><th>Invest</th><th>Maintain</th></tr>
+      <tr><th>Invest</th>
+        <td id="c-II"><input type="number" id="II-0" value="3"> , <input type="number" id="II-1" value="3"></td>
+        <td id="c-IM"><input type="number" id="IM-0" value="5"> , <input type="number" id="IM-1" value="1"></td></tr>
+      <tr><th>Maintain</th>
+        <td id="c-MI"><input type="number" id="MI-0" value="1"> , <input type="number" id="MI-1" value="5"></td>
+        <td id="c-MM"><input type="number" id="MM-0" value="4"> , <input type="number" id="MM-1" value="4"></td></tr>
+    </table>
+    <p><button onclick="analyze()">Analyze</button></p>
+    <div id="analysis"></div>
+  </section>
+
+  <section>
+    <h2>Repeated game</h2>
+    <p>Can cooperation at (Maintain, Maintain) survive when the game repeats?</p>
+    A: <select id="sa"></select> B: <select id="sb"></select>
+    Rounds: <input type="number" id="rounds" value="10" min="1" max="1000" style="width:64px">
+    Discount: <input type="number" id="disc" value="0.9" step="0.05" min="0.05" max="1" style="width:64px">
+    <button onclick="runSim()">Simulate</button>
+    <div id="sim"></div>
+  </section>
+</main>
+
+<script>
+const KEYS = { II:["Invest","Invest"], IM:["Invest","Maintain"], MI:["Maintain","Invest"], MM:["Maintain","Maintain"] };
+const CELL = { "Invest|Invest":"II", "Invest|Maintain":"IM", "Maintain|Invest":"MI", "Maintain|Maintain":"MM" };
+
+function payoffs() {
+  const out = {};
+  for (const [k, [a, b]] of Object.entries(KEYS))
+    out[`${a}|${b}`] = [0, 1].map(i => parseFloat(document.getElementById(`${k}-${i}`).value));
+  return out;
+}
+async function post(url, body) {
+  const r = await fetch(url, { method:"POST", body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error);
+  return j;
+}
+const tags = xs => xs.map(x => `<span class="tag">${Array.isArray(x) ? x.join(" / ") : x}</span>`).join("");
+
+async function analyze() {
+  const box = document.getElementById("analysis");
+  try {
+    const r = await post("/api/analyze", { payoffs: payoffs() });
+    document.querySelectorAll("td").forEach(td => td.classList.remove("nash"));
+    r.nash.forEach(p => document.getElementById("c-" + CELL[p.join("|")]).classList.add("nash"));
+    const thr = r.collusion_threshold;
+    box.innerHTML = `
+      <p><b>Dominant strategy:</b> A: ${r.dominant.A ?? "none"}, B: ${r.dominant.B ?? "none"}</p>
+      <p><b>Nash equilibrium (highlighted):</b> ${r.nash.length ? tags(r.nash) : "none in pure strategies"}</p>
+      <p><b>Pareto-optimal:</b> ${tags(r.pareto)}</p>
+      <p><b>Prisoner's Dilemma:</b> ${r.is_prisoners_dilemma ? "Yes - equilibrium is Pareto-inefficient" : "No"}</p>
+      ${thr !== null && r.is_prisoners_dilemma ? `<p><b>Collusion threshold:</b> grim trigger sustains (Maintain, Maintain) if discount factor ≥ ${thr.toFixed(2)}</p>` : ""}`;
+  } catch (e) { box.innerHTML = `<p class="err">${e.message}</p>`; }
+}
+
+async function runSim() {
+  const box = document.getElementById("sim");
+  try {
+    const r = await post("/api/simulate", {
+      payoffs: payoffs(), a: sa.value, b: sb.value,
+      rounds: +rounds.value, discount: +disc.value });
+    box.innerHTML = `<p><b>Totals:</b> A = ${r.total_A}, B = ${r.total_B}</p>
+      <table id="hist"><tr><th>Round</th><th>A</th><th>B</th><th>Payoff</th></tr>` +
+      r.history.map(h => `<tr><td>${h.round}</td><td>${h.A}</td><td>${h.B}</td><td>(${h.payoff_A}, ${h.payoff_B})</td></tr>`).join("") + "</table>";
+  } catch (e) { box.innerHTML = `<p class="err">${e.message}</p>`; }
+}
+
+(async () => {
+  const meta = await (await fetch("/api/meta")).json();
+  for (const s of meta.strategies) {
+    sa.add(new Option(s, s)); sb.add(new Option(s, s));
+  }
+  sa.value = "tit_for_tat"; sb.value = "tit_for_tat";
+  analyze();
+})();
+</script>
+</body>
+</html>
